@@ -1,41 +1,20 @@
 from types import SimpleNamespace
 from typing import Union
 
-class MNISTBagsConfig(SimpleNamespace):
-    seed: int
-    positive_num: int
-    mean_bag_size: int
-    var_bag_size: float
-    num_bags: int
-    train: bool
-    test_attention: bool
+class DatasetConfig(SimpleNamespace):
+    image_dir: str
+    geojson_dir_tissue: str
+    geojson_dir_nuclei: str
+    transform: bool
+    color_norm: str
 
-
-class HistoBagsConfig(SimpleNamespace):
-    seed: int
-    num_bags: int
-    h5_path: str
-    color_normalize: bool
-    datatype: str
-    mode: str
-    split: float
-
-
-class MILPoolingConfig(SimpleNamespace):
-    pooling_type: str
-    feature_dim: int  #M
-    attspace_dim: int  #L
-    attbranches: int
-
-
-class MILModelConfig(SimpleNamespace):
+class SegmentationModelConfig(SimpleNamespace):
     device: str
-    mode: str
     epochs: int
     batch_size: int
-    img_size: tuple[int, int, int]
-    dataset_config: Union[MNISTBagsConfig, HistoBagsConfig]
-    mil_pooling_config: MILPoolingConfig
+    dataset_config: DatasetConfig
+    num_classes: int
+    feature_extractor_path: str
     ckpt_path: str
     lr: float
     betas: tuple[float, float]
@@ -50,7 +29,4 @@ class MILModelConfig(SimpleNamespace):
     val_every: int
     save_max: int
     patience: int
-
-    # MS2 addition
-    just_features: bool
 

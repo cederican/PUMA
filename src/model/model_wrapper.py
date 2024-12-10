@@ -3,7 +3,7 @@ import torch.utils.data as data_utils
 from torchinfo import summary
 
 from src.modules.ModelWrapperABC import ModelWrapper
-from src.model.mil import MILModel
+from model.model import MILModel
 from src.dataset.HistoDataset import HistoDataset
 from src.modules.config import MILModelConfig, HistoBagsConfig, MILPoolingConfig
 from src.modules.metrics import LossErrorAccuracyPrecisionRecallF1Metric

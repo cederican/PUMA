@@ -5,7 +5,7 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 
 from src.model.mnist_mil_wrapper import AttDMILWrapper
-from src.model.histo_mil_wrapper import HistoMILWrapper
+from model.model_wrapper import HistoMILWrapper
 from src.modules.logger import WandbLogger
 from src.modules.utils import move_to_device
 

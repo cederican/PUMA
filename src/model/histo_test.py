@@ -7,8 +7,8 @@ from torchinfo import summary
 
 from src.modules.config import MILModelConfig, HistoBagsConfig, MILPoolingConfig
 from src.dataset.HistoDataset import HistoDataset
-from src.model.histo_mil_wrapper import HistoMILWrapper
-from src.model.mil import MILModel
+from model.model_wrapper import HistoMILWrapper
+from model.model import MILModel
 from src.modules.logger import bcolors
 from src.modules.trainer import Trainer
 from src.modules.logger import load_config

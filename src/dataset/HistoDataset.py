@@ -3,14 +3,51 @@ import tifffile
 import torch
 from torch.utils.data import Dataset
 import torchvision.transforms as T
+import torchvision.transforms.functional as F
 import numpy as np
+from PIL import Image
+import random
 import json
-from colornorm import macenko_normalization 
 from shapely.geometry import shape
 from skimage.draw import polygon
 from src.modules.plotting import plot_images
 from src.modules.utils import tissue_label_to_logits, tissue_logits_to_label, nuclei_label_to_logits, nuclei_logits_to_label
 from torch.utils.data import DataLoader
+
+
+class TransformImageAndMask:
+    def __init__(self):
+        self.resize = T.Resize(224)
+        self.to_tensor = T.ToTensor()
+        self.normalize = T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+
+    def __call__(self, image, tissue_seg, nuclei_seg):
+        if random.random() < 0.5:
+            image = F.hflip(image)
+            tissue_seg = F.hflip(tissue_seg)
+            nuclei_seg = F.hflip(nuclei_seg)
+
+        if random.random() < 0.5:
+            image = F.vflip(image)
+            tissue_seg = F.vflip(tissue_seg)
+            nuclei_seg = F.vflip(nuclei_seg)
+
+        angle = random.choice([0, 90, 180, 270])
+        image = F.rotate(image, angle)
+        tissue_seg = F.rotate(tissue_seg, angle)
+        nuclei_seg = F.rotate(nuclei_seg, angle)
+
+        image = self.resize(image)
+        tissue_seg = self.resize(tissue_seg)
+        nuclei_seg = self.resize(nuclei_seg)
+
+        image = self.to_tensor(image)
+        tissue_seg = torch.tensor(np.array(tissue_seg), dtype=torch.long)
+        nuclei_seg = torch.tensor(np.array(nuclei_seg), dtype=torch.long)
+
+        image = self.normalize(image)
+
+        return image, tissue_seg, nuclei_seg
 
 
 class HistoDataset(Dataset):
@@ -34,13 +71,7 @@ class HistoDataset(Dataset):
         self.geojson_dir_tissue = geojson_dir_tissue
         self.geojson_dir_nuclei = geojson_dir_nuclei
         if transform:
-            self.transform = T.Compose([
-                                    T.RandomHorizontalFlip(p=0.5),             # Random horizontal flip
-                                    T.RandomVerticalFlip(p=0.5),               # Random vertical flip
-                                    T.RandomRotation(degrees=90),              # Random rotation
-                                    T.Normalize(mean=[0.5, 0.5, 0.5],          # Normalize with mean and std
-                                                 std=[0.2, 0.2, 0.2]),
-                                ])
+            self.transform = TransformImageAndMask()
         else:
             self.transform = transform
         self.color_norm = color_norm
@@ -68,30 +99,34 @@ class HistoDataset(Dataset):
         name = os.path.splitext(os.path.basename(img_path))[0]
         name = name.split("_", maxsplit=2)[-1]
         image = tifffile.imread(img_path)
+        image_shape = image.shape
+        image = Image.fromarray(image)
+        if image.mode == "RGBA":
+            image = image.convert("RGB")
 
-        if self.color_norm == "macenko":
-            image = macenko_normalization(image)
-        # elif self.color_norm == "reinhard":
-        #     image = reinhard_normalization(image)
-        elif self.color_norm is None:
-            print("No color normalization applied.")
+        # if self.color_norm == "macenko":
+        #     image = macenko_normalization(image)
+        # # elif self.color_norm == "reinhard":
+        # #     image = reinhard_normalization(image)
+        # elif self.color_norm is None:
+        #     print("No color normalization applied.")
 
-        tissue_seg = self._load_geojson(self.tissue_paths[idx], image.shape[:2], "tissue")
-        nuclei_seg = self._load_geojson(self.nuclei_paths[idx], image.shape[:2], "nuclei")
+        tissue_seg = self._load_geojson(self.tissue_paths[idx], image_shape[:2], "tissue")
+        tissue_seg = Image.fromarray(tissue_seg)
+        nuclei_seg = self._load_geojson(self.nuclei_paths[idx], image_shape[:2], "nuclei")
+        nuclei_seg = Image.fromarray(nuclei_seg)
 
         label = self.labels[idx]
         
-        tissue_seg = torch.tensor(tissue_seg, dtype=torch.long)
-        nuclei_seg = torch.tensor(nuclei_seg, dtype=torch.long)
+        if self.transform:
+            image, tissue_seg, nuclei_seg = self.transform(image, tissue_seg, nuclei_seg)
+            
+        # visualize
+        plot_images(image.permute(1,2,0), tissue_seg, nuclei_seg, name)
         
-        plot_images(image, tissue_seg, nuclei_seg, name)
-        
-        image = torch.tensor(image, dtype=torch.float32).permute(2, 0, 1)  # (H, W, C) -> (C, H, W)
 
         # ToDo - Add data augmentation here
         # patchify the image and the masks
-        if self.transform:
-            image = self.transform(image)
 
         return image, tissue_seg, nuclei_seg, label
 
@@ -142,14 +177,14 @@ if __name__ == "__main__":
         image_dir="data/01_training_dataset_tif_ROIs",
         geojson_dir_tissue="data/01_training_dataset_geojson_tissue",
         geojson_dir_nuclei="data/01_training_dataset_geojson_nuclei",
-        transform=None,
+        transform=True,
         color_norm=None,
     )
     val_dataset = HistoDataset(
         image_dir="/home/cederic/dev/puma/data/01_training_dataset_tif_ROIs",
         geojson_dir_tissue="/home/cederic/dev/puma/data/01_training_dataset_geojson_tissue",
         geojson_dir_nuclei="/home/cederic/dev/puma/data/01_training_dataset_geojson_nuclei",
-        transform=None,
+        transform=True,
         color_norm=None,
     )
 
