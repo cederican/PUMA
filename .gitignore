@@ -3,3 +3,6 @@ data/
 *.pth
 *.tar
 __pychache__/
+wandb/
+*.png
+*.pt

@@ -3,7 +3,7 @@ from ignite.metrics import Metric
 from ignite.exceptions import NotComputableError
 from sklearn.metrics import roc_auc_score
 
-class LossErrorAccuracyPrecisionRecallF1Metric(Metric):
+class SegmentationMetric(Metric):
     """
     Custom metric for calculating loss, error, accuracy, precision, recall, F1 score, and AUC.
 
@@ -11,19 +11,20 @@ class LossErrorAccuracyPrecisionRecallF1Metric(Metric):
         model (nn.Module): The model being evaluated.
         device (str): The device on which computations are performed.
     """
-    def __init__(self, model, just_features, mode, device="cpu"):
+    def __init__(self, model, mode, num_classes, device):
         self.model = model
-        self.just_features = just_features
         self.mode = mode
+        self.device = device
+        self.num_classes = num_classes
         self._loss_sum = 0
         self._error_sum = 0
         self._accuracy_sum = 0
         self._true_positives = 0
         self._false_positives = 0
         self._false_negatives = 0
+        self._dice_sum = 0
+        self._iou_sum = 0
         self._num_examples = 0
-        self._y_true = [] 
-        self._y_scores = []
         super().__init__(device=device)
 
     def reset(self):
@@ -36,9 +37,9 @@ class LossErrorAccuracyPrecisionRecallF1Metric(Metric):
         self._true_positives = 0
         self._false_positives = 0
         self._false_negatives = 0
+        self._dice_sum = 0
+        self._iou_sum = 0
         self._num_examples = 0
-        self._y_true = []
-        self._y_scores = []
         super().reset()
 
     def update(self, batch):
@@ -48,35 +49,36 @@ class LossErrorAccuracyPrecisionRecallF1Metric(Metric):
         Args:
             batch (tuple): A tuple containing the input data and labels.
         """
-        if self.just_features == False:
-            bag, label = batch[0], batch[1]
-            y_bag_true = label[0].float()
-        else:
-            bag, label, cls, dict = batch
-            y_bag_true = label
-        y_bag_pred, _ = self.model(bag)
-  
-        y_bag_pred = th.clamp(y_bag_pred, min=1e-4, max=1.0 - 1e-4)
+        image, tissue_seg, nuclei_seg, label = batch
+        image, tissue_seg, nuclei_seg = image.to(self.device), tissue_seg.to(self.device), nuclei_seg.to(self.device)
         
-        loss = th.nn.BCELoss()(y_bag_pred, y_bag_true)
+        logits, probs, predicted_classes, features = self.model(image)
+        tissue_seg = tissue_seg.to(logits.device)
         
-        y_bag_pred_binary = th.where(y_bag_pred > 0.5, 1, 0)
+        tissue_seg_one_hot = th.nn.functional.one_hot(tissue_seg, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
 
-        accuracy = th.mean((y_bag_pred_binary == y_bag_true).float()).item()
-        error = 1.0 - accuracy
+        # Loss (Dice Loss)
+        intersection = th.sum(probs * tissue_seg_one_hot, dim=(2, 3))
+        union = th.sum(probs + tissue_seg_one_hot, dim=(2, 3))
+        dice_score = (2.0 * intersection + 1e-6) / (union + 1e-6)
+        macro_dice = th.mean(dice_score, dim=1)
+        dice_loss = 1.0 - macro_dice.mean()
 
-        # Precision, Recall, F1
-        self._true_positives += th.sum((y_bag_pred_binary == 1) & (y_bag_true == 1)).item()
-        self._false_positives += th.sum((y_bag_pred_binary == 1) & (y_bag_true == 0)).item()
-        self._false_negatives += th.sum((y_bag_pred_binary == 0) & (y_bag_true == 1)).item()
+        # Pixel Accuracy
+        correct_pixels = (predicted_classes == tissue_seg).sum().item()
+        total_pixels = predicted_classes.numel()
+        pixel_accuracy = correct_pixels / total_pixels
 
-        self._loss_sum += loss.item()
-        self._error_sum += error
-        self._accuracy_sum += accuracy
+        # IoU and mIoU
+        iou_per_class = (intersection + 1e-6) / (union - intersection + 1e-6)
+        mean_iou = th.mean(iou_per_class).item()
+
+        # Update cumulative metrics
+        self._loss_sum += dice_loss.item()
+        self._accuracy_sum += pixel_accuracy
+        self._dice_sum += macro_dice.mean().item()
+        self._iou_sum += mean_iou
         self._num_examples += 1
-
-        self._y_true.extend(y_bag_true.cpu().numpy())
-        self._y_scores.extend(y_bag_pred.detach().cpu().numpy())
 
     def compute(self):
         """
@@ -86,38 +88,24 @@ class LossErrorAccuracyPrecisionRecallF1Metric(Metric):
             dict: A dictionary containing the computed metrics.
         """
         if self._num_examples == 0:
-            raise NotComputableError("LossErrorAccuracyPrecisionRecallF1Metric must have at least one example before it can be computed.")
+            raise NotComputableError("SegmentationMetrics must have at least one example before it can be computed.")
         
         avg_loss = self._loss_sum / self._num_examples
-        avg_error = self._error_sum / self._num_examples
         avg_accuracy = self._accuracy_sum / self._num_examples
+        avg_dice = self._dice_sum / self._num_examples
+        avg_iou = self._iou_sum / self._num_examples
         
-        precision = self._true_positives / (self._true_positives + self._false_positives) if (self._true_positives + self._false_positives) > 0 else 0.0
-        recall = self._true_positives / (self._true_positives + self._false_negatives) if (self._true_positives + self._false_negatives) > 0 else 0.0
-        f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-
-        try:
-            auc = roc_auc_score(self._y_true, self._y_scores)
-        except ValueError:
-            auc = float('nan')
-
         if self.mode == "val":
             return {
                 "val/loss": avg_loss,
-                "val/error": avg_error,
                 "val/accuracy": avg_accuracy,
-                "val/precision": precision,
-                "val/recall": recall,
-                "val/f1": f1_score,
-                "val/auc": auc
+                "val/dice": avg_dice,
+                "val/iou": avg_iou,
             }
         elif self.mode == "test":
             return {
                 "test/loss": avg_loss,
-                "test/error": avg_error,
                 "test/accuracy": avg_accuracy,
-                "test/precision": precision,
-                "test/recall": recall,
-                "test/f1": f1_score,
-                "test/auc": auc
+                "test/dice": avg_dice,
+                "test/iou": avg_iou,
             }

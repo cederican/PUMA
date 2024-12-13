@@ -7,16 +7,20 @@ class DatasetConfig(SimpleNamespace):
     geojson_dir_nuclei: str
     transform: bool
     color_norm: str
+    preprocess: bool
 
 class SegmentationModelConfig(SimpleNamespace):
     device: str
     epochs: int
     batch_size: int
+    split: list[float]
     dataset_config: DatasetConfig
     num_classes: int
     feature_extractor_path: str
+    reset_encoder_parameters: bool
     ckpt_path: str
     lr: float
+    dropout: float
     betas: tuple[float, float]
     weight_decay: float
     T_0: int
@@ -28,5 +32,4 @@ class SegmentationModelConfig(SimpleNamespace):
     misc_save_path: str
     val_every: int
     save_max: int
-    patience: int
 

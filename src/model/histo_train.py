@@ -5,26 +5,26 @@ import torch as th
 import torch.utils.data as data_utils
 from torchinfo import summary
 
-from src.modules.config import MILModelConfig, HistoBagsConfig, MILPoolingConfig
+from src.modules.config import DatasetConfig, SegmentationModelConfig
 from src.dataset.HistoDataset import HistoDataset
-from model.model_wrapper import HistoMILWrapper
-from model.model import MILModel
+from src.model.model_wrapper import SegmentationModelWrapper
+from src.model.model import SegmentationModel
 from src.modules.logger import prepare_folder, get_run_name, bcolors, WandbLogger, save_config
 from src.modules.trainer import Trainer
 
 def train(config=None):
 
-    base_log_dir = '/home/pml06/dev/attdmil/logs/histo'
+    base_log_dir = '/home/cederic/dev/puma/logs'
 
     with wandb.init(
             dir=base_log_dir,
             config=config,
         ):
         config = wandb.config
-        base_log_dir = base_log_dir + f"/{config.num_bags}"
+        base_log_dir = base_log_dir
         if not os.path.exists(base_log_dir):
             os.makedirs(base_log_dir)
-        run_name = get_run_name(base_log_dir, f"{config.mode}_pool{config.pooling_type}_lr_{config.lr}_wd_{config.weight_decay}")
+        run_name = get_run_name(base_log_dir, f"lr_{round(config.lr, 5)}_wd_{round(config.weight_decay, 5)}_batch_{config.batch_size}_dropout_{config.dropout}")
         wandb.run.name = run_name  
         wandb.run.save()
         ckpt_save_path, misc_save_path = prepare_folder(base_log_dir, run_name)
@@ -34,50 +34,25 @@ def train(config=None):
         print(f"{bcolors.OKBLUE}Misc save path: {bcolors.BOLD}{misc_save_path}{bcolors.ENDC}")
     
         # Configure the model with parameters from the sweep
-        train_config = MILModelConfig(
-            device=th.device("cuda" if th.cuda.is_available() else "cpu"),
-            mode=config.mode,
+        train_config = SegmentationModelConfig(
+            device=th.device("cuda:4" if th.cuda.is_available() else "cpu"),
             epochs=100,
-            batch_size=1,
-            train_dataset_config=HistoBagsConfig(
-                seed=1,
-                prop_num_bags=config.num_bags,
-                h5_path="/home/pml06/dev/attdmil/HistoData/camelyon16.h5",
-                color_normalize=False,
-                datatype="features",
-                mode="train",
-                val_mode=False,
-                split=0.8,
+            batch_size=config.batch_size,
+            split = [0.8, 0.1, 0.1],
+            dataset_config=DatasetConfig(
+                image_dir="data/01_training_dataset_tif_ROIs",
+                geojson_dir_tissue="data/01_training_dataset_geojson_tissue",
+                geojson_dir_nuclei="data/01_training_dataset_geojson_nuclei",
+                transform=True,
+                color_norm=None,
+                preprocess=False,
             ),
-            val_dataset_config=HistoBagsConfig(
-                seed=1,
-                prop_num_bags=config.num_bags,
-                h5_path="/home/pml06/dev/attdmil/HistoData/camelyon16.h5",
-                color_normalize=False,
-                datatype="features",
-                mode="train",
-                val_mode=True,
-                split=0.8,
-            ),
-            test_dataset_config=HistoBagsConfig(
-                seed=1,
-                prop_num_bags=1,
-                h5_path="/home/pml06/dev/attdmil/HistoData/camelyon16.h5",
-                color_normalize=False,
-                datatype="features",
-                mode="test",
-                val_mode=False,
-                split=0.8,
-            ),
-            mil_pooling_config=MILPoolingConfig(
-                pooling_type=config.pooling_type,
-                feature_dim=768,
-                attspace_dim=config.attspace_dim,
-                attbranches=1
-            ),
-            just_features=True,
+            num_classes=6,
+            feature_extractor_path="/home/cederic/dev/puma/models/ctranspath.pth",
+            reset_encoder_parameters=True,
             ckpt_path=None,
             lr=config.lr,
+            dropout=config.dropout,
             betas=(0.9, 0.999),
             weight_decay=config.weight_decay,
             T_0=50,
@@ -87,33 +62,50 @@ def train(config=None):
             gamma=0.1,
             ckpt_save_path=ckpt_save_path,
             misc_save_path=misc_save_path,
-            val_every=5,
+            val_every=20,
             save_max=5,
-            patience=2,
         )
         save_config(base_log_dir, run_name, train_config.__dict__)
-
+        
+        dataset = HistoDataset(**train_config.dataset_config.__dict__)
+        dataset_size = len(dataset)
+        train_size = int(train_config.split[0] * dataset_size)
+        val_size = int(train_config.split[1] * dataset_size)
+        test_size = dataset_size - train_size - val_size
+        train_dataset, val_dataset, test_dataset = th.utils.data.random_split(dataset, [train_size, val_size, test_size])
+        
         train_loader = data_utils.DataLoader(
-            HistoDataset(**train_config.train_dataset_config.__dict__),
+            train_dataset,
             batch_size=train_config.batch_size,
-            shuffle=True
+            shuffle=True,
+            num_workers=4,
+            pin_memory=True,
         )
+        
         val_loader = data_utils.DataLoader(
-            HistoDataset(**train_config.val_dataset_config.__dict__),
+            val_dataset,
             batch_size=train_config.batch_size,
-            shuffle=False
+            shuffle=False,
+            num_workers=4,
+            pin_memory=True,
         )
+        
         test_loader = data_utils.DataLoader(
-            HistoDataset(**train_config.test_dataset_config.__dict__),
+            test_dataset,
             batch_size=train_config.batch_size,
-            shuffle=False
+            shuffle=False,
+            num_workers=4,
+            pin_memory=True,
         )
 
         # Initialize model and wrapper
-        model = MILModel(mil_model_config=train_config).to(train_config.device)
-        wrapper = HistoMILWrapper(model=model, config=train_config, epochs=train_config.epochs)
+        model = SegmentationModel(config=train_config).to(train_config.device)
+        wrapper = SegmentationModelWrapper(model=model, config=train_config, epochs=train_config.epochs)
 
-        summary(model, input_data=th.rand(1000, 768).to(train_config.device))
+        summary(model,
+           verbose=1,
+           input_data={"x": th.rand(1,3,224,224).to(train_config.device)},
+        )
 
         trainer = Trainer(
             device=train_config.device,
@@ -129,7 +121,6 @@ def train(config=None):
             ckpt_save_path=train_config.ckpt_save_path,
             ckpt_save_max=train_config.save_max,
             val_every=train_config.val_every,
-            patience=train_config.patience,
         )
 
         trainer.test(
@@ -145,27 +136,23 @@ def main_sweep():
     sweep_config = {
         'method': 'grid',
         'metric': {
-            'name': 'val/auc',
+            'name': 'val/dice',
             'goal': 'maximize' 
             },
         'parameters': {
             'lr': {
-                'values': [0.0005, 0.0001, 0.0005]     # [0.0005, 0.0001, 0.00005]
+                'values': [1e-3]
             },
+            
             'weight_decay': {
-                'values': [1e-3, 1e-4]     # [1e-4, 1e-5]
+                'values': [1e-2]
             },
-            'num_bags': {
-                'values': [1]     # proportion 1 for all bags float for less     [50, 100, 150, 200, 300, 400, 500]
+            
+            'batch_size': {
+                'values': [4]    
             },
-            'mode': {
-                'values': ['embedding','instance']     # ['embedding', 'instance']
-            },
-            'pooling_type': {
-                'values': ['attention', 'gated_attention', 'max', 'mean']       # ['max', 'mean', 'attention', 'gated_attention']
-            },
-            'attspace_dim': {
-                'values': [256]     # [128, 256, 512]
+            'dropout': {
+                'values': [0.5]
             },
         }
     }
@@ -175,11 +162,11 @@ def main_sweep():
 if __name__ == "__main__":
 
     for i in range(1):
-        project_name = 'AttDMIL-PML-HISTO'
+        project_name = 'PUMA-SEGMENT'
         # Initialize a sweep
         sweep_config = main_sweep()
         sweep_id = wandb.sweep(sweep=sweep_config, project=project_name)
-        wandb.agent(sweep_id, function=train, count=48)
+        wandb.agent(sweep_id, function=train, count=6)
         print(f"{bcolors.OKGREEN}Sweep {i} completed!{bcolors.ENDC}")
         time.sleep(4)
     print("All sweeps completed successfully!")

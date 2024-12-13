@@ -4,8 +4,7 @@ import torch as th
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 
-from src.model.mnist_mil_wrapper import AttDMILWrapper
-from model.model_wrapper import HistoMILWrapper
+from src.model.model_wrapper import SegmentationModelWrapper
 from src.modules.logger import WandbLogger
 from src.modules.utils import move_to_device
 
@@ -15,7 +14,7 @@ class Trainer:
         self,
         *,
         device: str,
-        wrapper: HistoMILWrapper,
+        wrapper: SegmentationModelWrapper,
         misc_save_path: str,
     ):
         self.device = device
@@ -43,7 +42,6 @@ class Trainer:
         ckpt_save_path: str,
         ckpt_save_max: int,
         val_every: int,
-        patience: int,
     ):  
         global_step = 0
         self._configure_optimizers()
@@ -68,28 +66,22 @@ class Trainer:
             # Training
             global_step = self._train(train_loader, epoch, global_step)
             self.lr_scheduler.step()
-
-            # visualize attention mechanism every epoch
-            if self.val_every is not None and epoch < 10:
-                self.visualize(val_loader, global_step)
-                global_step += 1
     
             # Validation
             if self.val_every is not None and epoch % self.val_every == 0:
                 global_step = self._validate(epoch, val_loader, global_step)
-                current_val_loss, current_val_error, current_val_auc  = self.wrapper.val_metrics.compute()["val/loss"], self.wrapper.val_metrics.compute()["val/error"], self.wrapper.val_metrics.compute()["val/auc"]
+                current_val_loss, current_val_accuracy, current_val_dice, current_val_iou  = self.wrapper.val_metrics.compute()["val/loss"], self.wrapper.val_metrics.compute()["val/accuracy"], self.wrapper.val_metrics.compute()["val/dice"], self.wrapper.val_metrics.compute()["val/iou"]
                 
-                # stopping criteria based on proposed approach in the paper
-                combined_stop_metric = current_val_loss + current_val_error
+                self.visualize(val_loader, global_step)
+                global_step += 1
+    
 
-                if combined_stop_metric < best_value:
-                    best_auc = current_val_auc
-                    best_value = combined_stop_metric
+                if current_val_loss < best_value:
+                    best_value = current_val_loss
                     no_improvement_count = 0
 
-                    
                     if self.ckpt_save_path is not None:
-                        self._save_model(f"best_ep={epoch}_val_loss={best_value:.4f}")
+                        self._save_model(f"best_ep={epoch}_val_diceloss={best_value:.4f}")
                 else:
                     no_improvement_count += 1
 
@@ -123,7 +115,7 @@ class Trainer:
                 self.logger.log_scalar_test(f"{name}", value)
         self.logger.finish()
     
-
+    
     def _train(
             self,
             train_loader: DataLoader,
@@ -214,8 +206,8 @@ class Trainer:
 
             for batch_idx, batch in enumerate(loader):
                 batch = move_to_device(batch, self.device)
-                self.wrapper.visualize_step(self.model, batch, self.misc_save_path, global_step, 'train')
-                if batch_idx == 3:
+                self.wrapper.visualize_step(self.model, batch, self.misc_save_path, global_step+batch_idx, 'train')
+                if batch_idx == 1:
                     break
                     
     

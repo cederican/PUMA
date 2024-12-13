@@ -15,12 +15,41 @@ from src.modules.utils import tissue_label_to_logits, tissue_logits_to_label, nu
 from torch.utils.data import DataLoader
 
 
-class TransformImageAndMask:
+class PreprocessImageAndMask:
     def __init__(self):
         self.resize = T.Resize(224)
         self.to_tensor = T.ToTensor()
-        self.normalize = T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+        #self.normalize = T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
 
+    def __call__(self, image, tissue_seg, nuclei_seg):
+        # if random.random() < 0.5:
+        #     image = F.hflip(image)
+        #     tissue_seg = F.hflip(tissue_seg)
+        #     nuclei_seg = F.hflip(nuclei_seg)
+
+        # if random.random() < 0.5:
+        #     image = F.vflip(image)
+        #     tissue_seg = F.vflip(tissue_seg)
+        #     nuclei_seg = F.vflip(nuclei_seg)
+
+        # angle = random.choice([0, 90, 180, 270])
+        # image = F.rotate(image, angle)
+        # tissue_seg = F.rotate(tissue_seg, angle)
+        # nuclei_seg = F.rotate(nuclei_seg, angle)
+
+        image = self.resize(image)
+        tissue_seg = self.resize(tissue_seg)
+        nuclei_seg = self.resize(nuclei_seg)
+
+        image = self.to_tensor(image)
+        tissue_seg = torch.tensor(np.array(tissue_seg), dtype=torch.long)
+        nuclei_seg = torch.tensor(np.array(nuclei_seg), dtype=torch.long)
+
+        #image = self.normalize(image)
+
+        return image, tissue_seg, nuclei_seg
+
+class TransformImageAndMask:
     def __call__(self, image, tissue_seg, nuclei_seg):
         if random.random() < 0.5:
             image = F.hflip(image)
@@ -34,20 +63,10 @@ class TransformImageAndMask:
 
         angle = random.choice([0, 90, 180, 270])
         image = F.rotate(image, angle)
-        tissue_seg = F.rotate(tissue_seg, angle)
-        nuclei_seg = F.rotate(nuclei_seg, angle)
+        tissue_seg = F.rotate(tissue_seg.unsqueeze(0), angle)
+        nuclei_seg = F.rotate(nuclei_seg.unsqueeze(0), angle)
 
-        image = self.resize(image)
-        tissue_seg = self.resize(tissue_seg)
-        nuclei_seg = self.resize(nuclei_seg)
-
-        image = self.to_tensor(image)
-        tissue_seg = torch.tensor(np.array(tissue_seg), dtype=torch.long)
-        nuclei_seg = torch.tensor(np.array(nuclei_seg), dtype=torch.long)
-
-        image = self.normalize(image)
-
-        return image, tissue_seg, nuclei_seg
+        return image, tissue_seg.squeeze(0), nuclei_seg.squeeze(0)
 
 
 class HistoDataset(Dataset):
@@ -57,7 +76,8 @@ class HistoDataset(Dataset):
         geojson_dir_tissue,
         geojson_dir_nuclei,
         transform=None,
-        color_norm="macenko"
+        color_norm="macenko",
+        preprocess=False,
     ):
         """
         Args:
@@ -70,24 +90,42 @@ class HistoDataset(Dataset):
         self.image_dir = image_dir
         self.geojson_dir_tissue = geojson_dir_tissue
         self.geojson_dir_nuclei = geojson_dir_nuclei
-        if transform:
+        self.preprocess = preprocess
+        
+        if transform and preprocess:
+            self.transform = PreprocessImageAndMask()
+        elif transform and not preprocess:
             self.transform = TransformImageAndMask()
         else:
             self.transform = transform
-        self.color_norm = color_norm
+        
+        if preprocess:
+            self.image_paths = sorted(
+                [os.path.join(image_dir, fname) for fname in os.listdir(image_dir) if fname.endswith(".tif")]
+            )
 
-        self.image_paths = sorted(
-            [os.path.join(image_dir, fname) for fname in os.listdir(image_dir) if fname.endswith(".tif")]
-        )
+            self.labels = [1 if "metastatic" in os.path.basename(path) else 0 for path in self.image_paths] # metastatic = 1, primary = 0
 
-        self.labels = [1 if "metastatic" in os.path.basename(path) else 0 for path in self.image_paths] # metastatic = 1, primary = 0
-
-        self.tissue_paths = sorted(
-            [os.path.join(geojson_dir_tissue, fname) for fname in os.listdir(geojson_dir_tissue) if fname.endswith(".geojson")]
-        )
-        self.nuclei_paths = sorted(
-            [os.path.join(geojson_dir_nuclei, fname) for fname in os.listdir(geojson_dir_nuclei) if fname.endswith(".geojson")]
-        )
+            self.tissue_paths = sorted(
+                [os.path.join(geojson_dir_tissue, fname) for fname in os.listdir(geojson_dir_tissue) if fname.endswith(".geojson")]
+            )
+            self.nuclei_paths = sorted(
+                [os.path.join(geojson_dir_nuclei, fname) for fname in os.listdir(geojson_dir_nuclei) if fname.endswith(".geojson")]
+            )
+        else:
+            self.image_paths = sorted(
+                [os.path.join("./data/preprocessed_data/images", fname) for fname in os.listdir("./data/preprocessed_data/images") if fname.endswith(".pt")]
+            )
+            
+            length = len(self.image_paths)
+            self.labels = [1] * 101 + [0] * (length-101) # metastatic = 1, primary = 0
+            
+            self.tissue_paths = sorted(
+                [os.path.join("./data/preprocessed_data/tissue_seg", fname) for fname in os.listdir("./data/preprocessed_data/tissue_seg") if fname.endswith(".pt")]
+            )
+            self.nuclei_paths = sorted(
+                [os.path.join("./data/preprocessed_data/nuclei_seg", fname) for fname in os.listdir("./data/preprocessed_data/nuclei_seg") if fname.endswith(".pt")]
+            )
 
     def __len__(self):
         return len(self.image_paths)
@@ -95,34 +133,35 @@ class HistoDataset(Dataset):
     def __getitem__(self, idx):
        
         img_path = self.image_paths[idx]
+        if self.preprocess:
+            name = os.path.splitext(os.path.basename(img_path))[0]
+            name = name.split("_", maxsplit=2)[-1]
+            image = tifffile.imread(img_path)
+            image_shape = image.shape
+            image = Image.fromarray(image)
+            if image.mode == "RGBA":
+                image = image.convert("RGB")
+
+            tissue_seg = self._load_geojson(self.tissue_paths[idx], image_shape[:2], "tissue")
+            tissue_seg = Image.fromarray(tissue_seg)
+            nuclei_seg = self._load_geojson(self.nuclei_paths[idx], image_shape[:2], "nuclei")
+            nuclei_seg = Image.fromarray(nuclei_seg)
+
+            label = self.labels[idx]
         
-        name = os.path.splitext(os.path.basename(img_path))[0]
-        name = name.split("_", maxsplit=2)[-1]
-        image = tifffile.imread(img_path)
-        image_shape = image.shape
-        image = Image.fromarray(image)
-        if image.mode == "RGBA":
-            image = image.convert("RGB")
-
-        # if self.color_norm == "macenko":
-        #     image = macenko_normalization(image)
-        # # elif self.color_norm == "reinhard":
-        # #     image = reinhard_normalization(image)
-        # elif self.color_norm is None:
-        #     print("No color normalization applied.")
-
-        tissue_seg = self._load_geojson(self.tissue_paths[idx], image_shape[:2], "tissue")
-        tissue_seg = Image.fromarray(tissue_seg)
-        nuclei_seg = self._load_geojson(self.nuclei_paths[idx], image_shape[:2], "nuclei")
-        nuclei_seg = Image.fromarray(nuclei_seg)
-
-        label = self.labels[idx]
+        else:
+            name = os.path.splitext(os.path.basename(img_path))[0]
+            image = torch.load(self.image_paths[idx], weights_only=True)
+            tissue_seg = torch.load(self.tissue_paths[idx], weights_only=True)
+            nuclei_seg = torch.load(self.nuclei_paths[idx], weights_only=True)
+            label = self.labels[idx]
         
         if self.transform:
             image, tissue_seg, nuclei_seg = self.transform(image, tissue_seg, nuclei_seg)
+        
             
         # visualize
-        plot_images(image.permute(1,2,0), tissue_seg, nuclei_seg, name)
+        #plot_images(image.permute(1,2,0), tissue_seg, nuclei_seg, str(label)+"_"+name)
         
 
         # ToDo - Add data augmentation here
@@ -179,17 +218,10 @@ if __name__ == "__main__":
         geojson_dir_nuclei="data/01_training_dataset_geojson_nuclei",
         transform=True,
         color_norm=None,
-    )
-    val_dataset = HistoDataset(
-        image_dir="/home/cederic/dev/puma/data/01_training_dataset_tif_ROIs",
-        geojson_dir_tissue="/home/cederic/dev/puma/data/01_training_dataset_geojson_tissue",
-        geojson_dir_nuclei="/home/cederic/dev/puma/data/01_training_dataset_geojson_nuclei",
-        transform=True,
-        color_norm=None,
+        preprocess=False
     )
 
     #train_data = train_dataset[0]
-    #val_data = val_dataset[0]
 
     train_data_loader = DataLoader(
         train_dataset, 
@@ -199,30 +231,24 @@ if __name__ == "__main__":
         pin_memory=True    # Optimize for GPU if available
     )
 
-    val_data_loader = DataLoader(
-        val_dataset, 
-        batch_size=1,      # Define batch size
-        shuffle=False,      # Shuffle data during loading
-        num_workers=0,     # Number of worker threads for loading data
-        pin_memory=True    # Optimize for GPU if available
-    )
-
+    # get datasets statistics for loss weighting
+    num_classes = 6
+    class_pixel_counts = np.zeros(num_classes, dtype=np.int64)
+    
     for batch_idx, (image, tissue_seg, nuclei_seg, label) in enumerate(train_data_loader):
         print(f"Batch {batch_idx}:")
-        print(f"Image shape: {image.shape}")
-        print(f"Tissue segmentation shape: {tissue_seg.shape}")
-        print(f"Nuclei segmentation shape: {nuclei_seg.shape}")
-        print(f"Label: {label}")
+        #print(f"Image shape: {image.shape}")
+        #print(f"Tissue segmentation shape: {tissue_seg.shape}")
+        #print(f"Nuclei segmentation shape: {nuclei_seg.shape}")
+        #print(f"Label: {label}")
+        unique, counts = np.unique(tissue_seg.numpy(), return_counts=True)
+        for cls, count in zip(unique, counts):
+            class_pixel_counts[cls] += count
     
-        if batch_idx == 1:
-            break
+    total_pixels = class_pixel_counts.sum()
+    class_weights = total_pixels / (num_classes * class_pixel_counts)
+        
+    print(f"Class pixel counts: {class_pixel_counts}")
+    print(f"Total pixels: {total_pixels}")
+    print(f"Class weights: {class_weights}")
     
-    for batch_idx, (image, tissue_seg, nuclei_seg, label) in enumerate(val_data_loader):
-        print(f"Batch {batch_idx}:")
-        print(f"Image shape: {image.shape}")
-        print(f"Tissue segmentation shape: {tissue_seg.shape}")
-        print(f"Nuclei segmentation shape: {nuclei_seg.shape}")
-        print(f"Label: {label}")
-    
-        if batch_idx == 1:
-            break

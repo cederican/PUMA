@@ -1,19 +1,21 @@
 import torch as th
 import torch.utils.data as data_utils
+import torch.nn.functional as F
 from torchinfo import summary
 
 from src.modules.ModelWrapperABC import ModelWrapper
-from model.model import MILModel
-from src.dataset.HistoDataset import HistoDataset
-from src.modules.config import MILModelConfig, HistoBagsConfig, MILPoolingConfig
-from src.modules.metrics import LossErrorAccuracyPrecisionRecallF1Metric
-from src.modules.plotting import visualize_histo_att, visualize_histo_gt, visualize_histo_patches
+from src.model.model import SegmentationModel
 
-class HistoMILWrapper(ModelWrapper):
+from src.dataset.HistoDataset import HistoDataset
+from src.modules.config import DatasetConfig, SegmentationModelConfig
+from src.modules.metrics import SegmentationMetric
+from src.modules.plotting import plot_images, visualize_segmentation
+
+class SegmentationModelWrapper(ModelWrapper):
     def __init__(
             self,
             *,
-            model: MILModel,
+            model: SegmentationModel,
             config: dict,
             epochs: int,
     ):
@@ -29,8 +31,8 @@ class HistoMILWrapper(ModelWrapper):
         """
         Initializes the validation metrics.
         """
-        self.val_metrics = LossErrorAccuracyPrecisionRecallF1Metric(model=self.model, just_features=self.config.just_features, mode="val", device="cuda")
-        self.test_metrics = LossErrorAccuracyPrecisionRecallF1Metric(model=self.model, just_features=self.config.just_features, mode="test", device="cuda")
+        self.val_metrics = SegmentationMetric(model=self.model,  mode="val", num_classes=self.config.num_classes, device=self.config.device)
+        self.test_metrics = SegmentationMetric(model=self.model, mode="test", num_classes=self.config.num_classes, device=self.config.device)
     
     
     def configure_optimizers(self):
@@ -65,85 +67,81 @@ class HistoMILWrapper(ModelWrapper):
     
     def training_step(
             self,
-            model: MILModel,
+            model: SegmentationModel,
             batch: tuple,
     ):
-        features, label, cls, dict = batch
-        features = features.squeeze(0)
-
-        loss, attention_entropy_loss, cls_loss = self._loss(model, features, label)
-        error, acc = self._error(model, features, label)
-
+        image, tissue_seg, nuclei_seg, label = batch
+        image, tissue_seg, nuclei_seg = image.to(self.config.device), tissue_seg.to(self.config.device), nuclei_seg.to(self.config.device)
+        
+        loss, dice_loss, pixel_loss = self._loss(model, image, tissue_seg)
         loss.backward()
 
-        return {"loss": loss, "error": th.tensor(error), "acc": th.tensor(acc), "attn_entropy_loss": attention_entropy_loss, "cls_loss": cls_loss}
+        return {"loss": loss, "dice_loss": dice_loss, "pixel_loss": pixel_loss}
     
     def validation_step(
             self,
             batch: tuple,
     ):
-        batch[0] = batch[0].squeeze(0)
+        #batch[0] = batch[0].squeeze(0)
         self.val_metrics.update(batch)
     
     def test_step(
             self,
             batch: tuple,
     ):
-        batch[0] = batch[0].squeeze(0)
+        #batch[0] = batch[0].squeeze(0)
         self.test_metrics.update(batch)
 
     def visualize_step(
             self,
-            model: MILModel,
+            model: SegmentationModel,
             batch: tuple,
             misc_save_path: str,
             global_step: int,
             mode: str,
     ):
         if mode == "train":
-            visualize_histo_att(model, batch, misc_save_path, global_step, mode, "raw")
+            visualize_segmentation(model, batch, misc_save_path, global_step, mode)
+            #visualize_histo_att(model, batch, misc_save_path, global_step, mode, "raw")
             #visualize_histo_gt(model, batch, misc_save_path)
             #visualize_histo_patches(model, batch, misc_save_path)
-        elif mode == "test":
-            visualize_histo_att(model, batch, misc_save_path, global_step, mode, "raw")
-            visualize_histo_att(model, batch, misc_save_path, global_step, mode, "log")
-            visualize_histo_att(model, batch, misc_save_path, global_step, mode, "percentile")
-
-        
-    
-    def _error(
-            self,
-            model: MILModel,
-            features: th.Tensor,
-            label: th.Tensor,
-    ):
-        y_bag_true = label
-        y_bag_pred, y_instance_pred = model(features)
-        y_bag_pred_binary = th.where(y_bag_pred > 0.5, 1, 0)
-        acc = th.mean((y_bag_pred_binary == y_bag_true).float()).item()
-        error = 1.0 - acc
-        return error, acc
+        #elif mode == "test":
+            #visualize_histo_att(model, batch, misc_save_path, global_step, mode, "raw")
+            #visualize_histo_att(model, batch, misc_save_path, global_step, mode, "log")
+            #visualize_histo_att(model, batch, misc_save_path, global_step, mode, "percentile")
+        pass
     
     def _loss(
             self,
-            model: MILModel,
-            features: th.Tensor,
-            label: th.Tensor,
+            model: SegmentationModel,
+            image: th.Tensor,
+            tissue_seg: th.Tensor,
     ):
-        c = 0.01
+        logits, probs, predicted_classes, features = model(image)
+        num_classes = logits.shape[1]
+        tissue_seg_one_hot = F.one_hot(tissue_seg, num_classes=num_classes).permute(0, 3, 1, 2).float()  # Shape: (B, num_classes, H, W)
 
-        y_bag_true = label
-        y_bag_pred, y_instance_pred = model(features)
-        y_bag_pred = th.clamp(y_bag_pred, min=1e-4, max=1. - 1e-4)
-        loss = th.nn.BCELoss()(y_bag_pred, y_bag_true)
-        attention_entropy_loss = th.tensor(0)
-        cls_loss = th.tensor(0)
+        intersection = th.sum(probs * tissue_seg_one_hot, dim=(2, 3))  # Shape: (B, num_classes)
+        union = th.sum(probs + tissue_seg_one_hot, dim=(2, 3))  # Shape: (B, num_classes)
+        
+        dice_score = (2.0 * intersection + 1e-6) / (union + 1e-6)  # Shape: (B, num_classes)
 
-        # add attention weight entropy loss
-        # attention_entropy_loss = -th.mean(th.sum(y_instance_pred * th.log(y_instance_pred + 1e-6), dim=0))
-        # cls_loss = th.nn.BCELoss()(y_bag_pred, y_bag_true)
-        # loss = cls_loss + c * attention_entropy_loss
-        return loss, c*attention_entropy_loss, cls_loss
+        # Average Dice score across all classes (macro Dice)
+        macro_dice = th.mean(dice_score, dim=1)  # Shape: (B,)
+
+        dice_loss = 1.0 - macro_dice.mean()
+        
+        #pixel loss
+        class_weights = [57.13917497, 0.62771381, 13.91278002, 0.24365293, 6.96976719, 14.31341772]  # based on data statistics          # 0: "tissue_white_background",1: "tissue_stroma",2: "tissue_blood_vessel",3: "tissue_tumor",4: "tissue_epidermis",5: "tissue_necrosis",
+        #class_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        criterion = th.nn.CrossEntropyLoss(weight=th.tensor(class_weights).to(self.config.device))
+        pixel_loss = criterion(logits, tissue_seg)
+        
+        loss = dice_loss
+        
+
+        return loss, dice_loss, pixel_loss
+
     
     def load_model_checkpoint(self, ckpt_path):
         try:
@@ -156,46 +154,40 @@ class HistoMILWrapper(ModelWrapper):
 
 if __name__ == "__main__":
 
-    train_config = MILModelConfig(
-        mode='embedding',
-        epochs=5,
-        batch_size=1,
-        img_size=(1, 28, 28),
-        dataset_config=HistoBagsConfig(
-            seed=1,
-            num_bags=5,
-            h5_path="/home/pml06/dev/attdmil/HistoData/camelyon16.h5",
-            color_normalize=False,
-            datatype="features",
-            mode="train",
-            split=0.8,
+    train_config = SegmentationModelConfig(
+        device="cuda",
+        epochs=2,
+        batch_size=8,
+        dataset_config=DatasetConfig(
+            image_dir="data/01_training_dataset_tif_ROIs",
+            geojson_dir_tissue="data/01_training_dataset_geojson_tissue",
+            geojson_dir_nuclei="data/01_training_dataset_geojson_nuclei",
+            transform=True,
+            color_norm=None,    
         ),
-        mil_pooling_config=MILPoolingConfig(
-            pooling_type='attention',
-            feature_dim=768,
-            attspace_dim=128,
-            attbranches=1
-        ),
-        just_features=True,
+        num_classes=6,
+        feature_extractor_path="/home/cederic/dev/puma/models/ctranspath.pth",
         ckpt_path=None,
-        lr=0.0005,
+        lr=1e-4,
         betas=(0.9, 0.999),
-        weight_decay=1e-4,
-        step_size=1000000,
+        weight_decay=1e-3,
+        step_size=10000000,
         gamma=0.1,
     )
 
     train_data_loader = data_utils.DataLoader(
         HistoDataset(**train_config.dataset_config.__dict__),
         batch_size=train_config.batch_size,
-        shuffle=True
+        shuffle=False
     )
 
-    model = MILModel(mil_model_config=train_config)
-    wrapper = HistoMILWrapper(model=model, config=train_config, epochs=train_config.epochs)
+    model = SegmentationModel(config=train_config)
+    wrapper = SegmentationModelWrapper(model=model, config=train_config, epochs=train_config.epochs)
 
-    summary(model, input_data=th.rand(1000, 768))
-
+    summary(model,
+           verbose=1,
+           input_data={"x": th.rand(1,3,224,224).to(train_config.device)},
+    )
 
     optimizer, lr_scheduler = wrapper.configure_optimizers()
     wrapper.init_val_metrics()
@@ -208,6 +200,6 @@ if __name__ == "__main__":
         wrapper.validation_step(
             batch=batch,
         )
-        print(f"Training Step {batch_idx} - Loss: {result['loss']}, Error: {result['error']}, Accuracy: {result['acc']}")
+        print(f"Training Step {batch_idx} - Loss: {result['loss']}")
         if batch_idx >= 2:
             break
