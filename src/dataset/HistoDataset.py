@@ -19,7 +19,7 @@ class PreprocessImageAndMask:
     def __init__(self):
         self.resize = T.Resize(224)
         self.to_tensor = T.ToTensor()
-        #self.normalize = T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+        self.normalize = T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
 
     def __call__(self, image, tissue_seg, nuclei_seg):
         # if random.random() < 0.5:
@@ -114,7 +114,7 @@ class HistoDataset(Dataset):
             )
         else:
             self.image_paths = sorted(
-                [os.path.join("./data/preprocessed_data/images", fname) for fname in os.listdir("./data/preprocessed_data/images") if fname.endswith(".pt")]
+                [os.path.join("./data/preprocessed_data/images_nn", fname) for fname in os.listdir("./data/preprocessed_data/images_nn") if fname.endswith(".pt")]
             )
             
             length = len(self.image_paths)
@@ -161,7 +161,7 @@ class HistoDataset(Dataset):
         
             
         # visualize
-        #plot_images(image.permute(1,2,0), tissue_seg, nuclei_seg, str(label)+"_"+name)
+        plot_images(image.permute(1,2,0), tissue_seg, nuclei_seg, str(label)+"_"+name)
         
 
         # ToDo - Add data augmentation here
@@ -232,8 +232,10 @@ if __name__ == "__main__":
     )
 
     # get datasets statistics for loss weighting
-    num_classes = 6
-    class_pixel_counts = np.zeros(num_classes, dtype=np.int64)
+    num_classes1 = 6
+    num_classes2 = 4
+    class_pixel_counts1 = np.zeros(num_classes1, dtype=np.int64)
+    class_pixel_counts2 = np.zeros(num_classes2, dtype=np.int64)
     
     for batch_idx, (image, tissue_seg, nuclei_seg, label) in enumerate(train_data_loader):
         print(f"Batch {batch_idx}:")
@@ -243,12 +245,23 @@ if __name__ == "__main__":
         #print(f"Label: {label}")
         unique, counts = np.unique(tissue_seg.numpy(), return_counts=True)
         for cls, count in zip(unique, counts):
-            class_pixel_counts[cls] += count
-    
-    total_pixels = class_pixel_counts.sum()
-    class_weights = total_pixels / (num_classes * class_pixel_counts)
+            class_pixel_counts1[cls] += count
         
-    print(f"Class pixel counts: {class_pixel_counts}")
+        unique, counts = np.unique(nuclei_seg.numpy(), return_counts=True)
+        for cls, count in zip(unique, counts):
+            class_pixel_counts2[cls] += count
+    
+    total_pixels = class_pixel_counts1.sum()
+    class_weights = total_pixels / (num_classes1 * class_pixel_counts1)
+        
+    print(f"Class pixel counts: {class_pixel_counts1}")
+    print(f"Total pixels: {total_pixels}")
+    print(f"Class weights: {class_weights}")
+    
+    total_pixels = class_pixel_counts2.sum()
+    class_weights = total_pixels / (num_classes2 * class_pixel_counts2)
+    
+    print(f"Class pixel counts: {class_pixel_counts2}")
     print(f"Total pixels: {total_pixels}")
     print(f"Class weights: {class_weights}")
     

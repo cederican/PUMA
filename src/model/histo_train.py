@@ -24,7 +24,7 @@ def train(config=None):
         base_log_dir = base_log_dir
         if not os.path.exists(base_log_dir):
             os.makedirs(base_log_dir)
-        run_name = get_run_name(base_log_dir, f"lr_{round(config.lr, 5)}_wd_{round(config.weight_decay, 5)}_batch_{config.batch_size}_dropout_{config.dropout}")
+        run_name = get_run_name(base_log_dir, f"mode_{config.mode}_lr_{round(config.lr, 5)}_wd_{round(config.weight_decay, 5)}_batch_{config.batch_size}_dropout_{config.dropout}")
         wandb.run.name = run_name  
         wandb.run.save()
         ckpt_save_path, misc_save_path = prepare_folder(base_log_dir, run_name)
@@ -36,7 +36,7 @@ def train(config=None):
         # Configure the model with parameters from the sweep
         train_config = SegmentationModelConfig(
             device=th.device("cuda:4" if th.cuda.is_available() else "cpu"),
-            epochs=100,
+            epochs=1000,
             batch_size=config.batch_size,
             split = [0.8, 0.1, 0.1],
             dataset_config=DatasetConfig(
@@ -47,7 +47,7 @@ def train(config=None):
                 color_norm=None,
                 preprocess=False,
             ),
-            num_classes=6,
+            mode=config.mode, # tissue or nuclei1 or nuclei2
             feature_extractor_path="/home/cederic/dev/puma/models/ctranspath.pth",
             reset_encoder_parameters=True,
             ckpt_path=None,
@@ -62,8 +62,8 @@ def train(config=None):
             gamma=0.1,
             ckpt_save_path=ckpt_save_path,
             misc_save_path=misc_save_path,
-            val_every=20,
-            save_max=5,
+            val_every=100,
+            save_max=2,
         )
         save_config(base_log_dir, run_name, train_config.__dict__)
         
@@ -141,18 +141,21 @@ def main_sweep():
             },
         'parameters': {
             'lr': {
-                'values': [1e-3]
+                'values': [1e-3, 1e-5]
             },
             
             'weight_decay': {
-                'values': [1e-2]
+                'values': [1e-3]
             },
             
             'batch_size': {
-                'values': [4]    
+                'values': [16]    
             },
             'dropout': {
-                'values': [0.5]
+                'values': [0.2, 0.5]
+            },
+            'mode': {
+                'values': ['tissue', 'nuclei1']
             },
         }
     }
@@ -166,7 +169,7 @@ if __name__ == "__main__":
         # Initialize a sweep
         sweep_config = main_sweep()
         sweep_id = wandb.sweep(sweep=sweep_config, project=project_name)
-        wandb.agent(sweep_id, function=train, count=6)
+        wandb.agent(sweep_id, function=train, count=8)
         print(f"{bcolors.OKGREEN}Sweep {i} completed!{bcolors.ENDC}")
         time.sleep(4)
     print("All sweeps completed successfully!")

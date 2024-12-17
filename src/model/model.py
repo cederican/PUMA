@@ -117,7 +117,7 @@ class SegmentationModel(nn.Module):
         super(SegmentationModel, self).__init__()
         
         self.config = config
-        self.num_classes = config.num_classes
+        self.mode = config.mode
         
         self.encoder = ConvFeatureExtractor(
             model_path=config.feature_extractor_path,
@@ -128,8 +128,16 @@ class SegmentationModel(nn.Module):
         self.dec3 = self._decoder_block(384, 384, 192)  # From (192, 768) to (28x28, 128)
         self.dec4 = self._decoder_block(192, 192, 64)         # From (128, 64) to (56x56, 64)
 
-        self.segmentation_head = nn.ConvTranspose2d(64, self.num_classes, kernel_size=4, stride=2, padding=1)  # Final upsample to 224x224
-
+        if self.mode == "tissue":
+            self.num_classes = 6
+            self.segmentation_head = nn.ConvTranspose2d(64, self.num_classes, kernel_size=4, stride=2, padding=1)  # Final upsample to 224x224
+        elif self.mode == "nuclei1":
+            self.num_classes = 4
+            self.segmentation_head = nn.ConvTranspose2d(64, self.num_classes, kernel_size=4, stride=2, padding=1)
+        elif self.mode == "nuclei2":
+            self.num_classes = 11
+            self.segmentation_head = nn.ConvTranspose2d(64, self.num_classes, kernel_size=4, stride=2, padding=1)
+        
         self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)  # Upsampling by a factor of 2
 
     def _decoder_block(self, in_channels, skip_channels, out_channels):
@@ -144,48 +152,6 @@ class SegmentationModel(nn.Module):
             nn.Dropout(self.config.dropout),
         )
         
-        
-        # self.dec1 = nn.Sequential(
-        #     nn.Linear(768, 7 * 7 * 768),               # Map (768) to (7x7x768)
-        #     nn.ReLU(inplace=True),
-        # )
-        # self.dec2 = nn.Sequential(
-        #     nn.ConvTranspose2d(768, 512, kernel_size=4, stride=2, padding=1),  # Upsample to 14x14
-        #     SEBlock(512),
-        #     nn.BatchNorm2d(512),
-        #     nn.ReLU(inplace=True),
-        #     nn.Dropout(self.config.dropout), 
-        # )
-        # self.dec3 = nn.Sequential(
-        #     nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1),  # Upsample to 28x28
-        #     SEBlock(256),
-        #     nn.BatchNorm2d(256),
-        #     nn.ReLU(inplace=True),
-        #     nn.Dropout(self.config.dropout),
-        # )
-        # self.dec4 = nn.Sequential(
-        #     nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),  # Upsample to 56x56
-        #     SEBlock(128),
-        #     nn.BatchNorm2d(128),
-        #     nn.ReLU(inplace=True),
-        #     nn.Dropout(self.config.dropout),
-        # )
-        # self.dec5 = nn.Sequential(
-        #     nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),   # Upsample to 112x112
-        #     SEBlock(64),
-        #     nn.BatchNorm2d(64),
-        #     nn.ReLU(inplace=True),
-        #     nn.Dropout(self.config.dropout),
-        # )
-        # self.segmentation_head = nn.ConvTranspose2d(64, self.num_classes, kernel_size=4, stride=2, padding=1)  # Final upsample to 224x224
-        
-        # self.encoder = self.encoder.to(config.device)
-        # self.dec1 = self.dec1.to(config.device)
-        # self.dec2 = self.dec2.to(config.device)
-        # self.dec3 = self.dec3.to(config.device)
-        # self.dec4 = self.dec4.to(config.device)
-        # self.dec5 = self.dec5.to(config.device)
-        # self.segmentation_head = self.segmentation_head.to(config.device)
         
     def forward(self, x):
        

@@ -9,7 +9,7 @@ from src.model.model import SegmentationModel
 from src.dataset.HistoDataset import HistoDataset
 from src.modules.config import DatasetConfig, SegmentationModelConfig
 from src.modules.metrics import SegmentationMetric
-from src.modules.plotting import plot_images, visualize_segmentation
+from src.modules.plotting import plot_images, visualize_tissue_segmentation, visualize_nuclei1_segmentation, visualize_nuclei2_segmentation
 
 class SegmentationModelWrapper(ModelWrapper):
     def __init__(
@@ -31,8 +31,8 @@ class SegmentationModelWrapper(ModelWrapper):
         """
         Initializes the validation metrics.
         """
-        self.val_metrics = SegmentationMetric(model=self.model,  mode="val", num_classes=self.config.num_classes, device=self.config.device)
-        self.test_metrics = SegmentationMetric(model=self.model, mode="test", num_classes=self.config.num_classes, device=self.config.device)
+        self.val_metrics = SegmentationMetric(model=self.model,  mode="val", num_classes=self.model.num_classes, device=self.config.device)
+        self.test_metrics = SegmentationMetric(model=self.model, mode="test", num_classes=self.model.num_classes, device=self.config.device)
     
     
     def configure_optimizers(self):
@@ -73,7 +73,11 @@ class SegmentationModelWrapper(ModelWrapper):
         image, tissue_seg, nuclei_seg, label = batch
         image, tissue_seg, nuclei_seg = image.to(self.config.device), tissue_seg.to(self.config.device), nuclei_seg.to(self.config.device)
         
-        loss, dice_loss, pixel_loss = self._loss(model, image, tissue_seg)
+        if self.config.mode == "tissue":
+            loss, dice_loss, pixel_loss = self._loss(model, image, tissue_seg)
+        elif self.config.mode == "nuclei1":
+            loss, dice_loss, pixel_loss = self._loss(model, image, nuclei_seg)
+            
         loss.backward()
 
         return {"loss": loss, "dice_loss": dice_loss, "pixel_loss": pixel_loss}
@@ -99,9 +103,16 @@ class SegmentationModelWrapper(ModelWrapper):
             misc_save_path: str,
             global_step: int,
             mode: str,
+            segment: str,
+            logger=None,
     ):
         if mode == "train":
-            visualize_segmentation(model, batch, misc_save_path, global_step, mode)
+            if segment == "tissue":
+                visualize_tissue_segmentation(model, batch, misc_save_path, global_step, mode, logger)
+            elif segment == "nuclei1":
+                visualize_nuclei1_segmentation(model, batch, misc_save_path, global_step, mode, logger)
+            elif segment == "nuclei2":
+                visualize_nuclei2_segmentation(model, batch, misc_save_path, global_step, mode)
             #visualize_histo_att(model, batch, misc_save_path, global_step, mode, "raw")
             #visualize_histo_gt(model, batch, misc_save_path)
             #visualize_histo_patches(model, batch, misc_save_path)
@@ -132,12 +143,14 @@ class SegmentationModelWrapper(ModelWrapper):
         dice_loss = 1.0 - macro_dice.mean()
         
         #pixel loss
-        class_weights = [57.13917497, 0.62771381, 13.91278002, 0.24365293, 6.96976719, 14.31341772]  # based on data statistics          # 0: "tissue_white_background",1: "tissue_stroma",2: "tissue_blood_vessel",3: "tissue_tumor",4: "tissue_epidermis",5: "tissue_necrosis",
-        #class_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        if self.config.mode == "tissue":
+            class_weights = [57.13917497, 0.62771381, 13.91278002, 0.24365293, 6.96976719, 14.31341772]  # based on data statistics          # 0: "tissue_white_background",1: "tissue_stroma",2: "tissue_blood_vessel",3: "tissue_tumor",4: "tissue_epidermis",5: "tissue_necrosis",
+        elif self.config.mode == "nuclei1":
+            class_weights = [0.33893721, 1.26005735, 6.75093788, 9.27138278] # based on data statistics  
         criterion = th.nn.CrossEntropyLoss(weight=th.tensor(class_weights).to(self.config.device))
         pixel_loss = criterion(logits, tissue_seg)
         
-        loss = dice_loss
+        loss = dice_loss + pixel_loss
         
 
         return loss, dice_loss, pixel_loss

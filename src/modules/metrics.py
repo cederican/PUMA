@@ -54,18 +54,22 @@ class SegmentationMetric(Metric):
         
         logits, probs, predicted_classes, features = self.model(image)
         tissue_seg = tissue_seg.to(logits.device)
+        nuclei_seg = nuclei_seg.to(logits.device)
         
-        tissue_seg_one_hot = th.nn.functional.one_hot(tissue_seg, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
+        if self.model.mode == "tissue":    
+            seg_one_hot = th.nn.functional.one_hot(tissue_seg, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
+        elif self.model.mode == "nuclei1":
+            seg_one_hot = th.nn.functional.one_hot(nuclei_seg, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
 
         # Loss (Dice Loss)
-        intersection = th.sum(probs * tissue_seg_one_hot, dim=(2, 3))
-        union = th.sum(probs + tissue_seg_one_hot, dim=(2, 3))
+        intersection = th.sum(probs * seg_one_hot, dim=(2, 3))
+        union = th.sum(probs + seg_one_hot, dim=(2, 3))
         dice_score = (2.0 * intersection + 1e-6) / (union + 1e-6)
         macro_dice = th.mean(dice_score, dim=1)
         dice_loss = 1.0 - macro_dice.mean()
 
         # Pixel Accuracy
-        correct_pixels = (predicted_classes == tissue_seg).sum().item()
+        correct_pixels = (predicted_classes == tissue_seg).sum().item() if self.model.mode == "tissue" else (predicted_classes == nuclei_seg).sum().item()
         total_pixels = predicted_classes.numel()
         pixel_accuracy = correct_pixels / total_pixels
 

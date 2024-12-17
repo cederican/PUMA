@@ -206,7 +206,7 @@ class Trainer:
 
             for batch_idx, batch in enumerate(loader):
                 batch = move_to_device(batch, self.device)
-                self.wrapper.visualize_step(self.model, batch, self.misc_save_path, global_step+batch_idx, 'train')
+                self.wrapper.visualize_step(self.model, batch, self.misc_save_path, global_step+batch_idx, 'train', self.model.mode, logger=self.logger)
                 if batch_idx == 1:
                     break
                     

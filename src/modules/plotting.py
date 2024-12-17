@@ -87,18 +87,21 @@ def plot_images(
     plt.savefig(f"logs/misc/visualize_data_{name}.png")
 
 
-def visualize_segmentation(
+def visualize_tissue_segmentation(
     model,
     batch,
     misc_save_path,
     global_step,
-    mode
+    mode,
+    logger,
 ):
     image, tissue_seg, nuclei_seg, label = batch
     logits, probs, predicted_classes, features = model(image)
 
     gt_mask = create_colored_mask(tissue_seg[0].cpu().numpy(), tissue_colors)
     pred_mask = create_colored_mask(predicted_classes[0].cpu().numpy(), tissue_colors)
+    
+    logger.log_segmentations(model.mode, image, pred_mask, gt_mask)
     
     fig, ax = plt.subplots(1, 3, figsize=(16, 7))
     
@@ -121,7 +124,84 @@ def visualize_segmentation(
     plt.tight_layout()
     plt.show()
     
-    plt.savefig(f"{misc_save_path}/segmentation_{mode}_{global_step}.png")
+    plt.savefig(f"{misc_save_path}/tissue_segmentation_{mode}_{global_step}.png")
+
+  
+def visualize_nuclei1_segmentation(
+    model,
+    batch,
+    misc_save_path,
+    global_step,
+    mode,
+    logger,
+):
+    image, tissue_seg, nuclei_seg, label = batch
+    logits, probs, predicted_classes, features = model(image) ######
+
+    gt_mask = create_colored_mask(nuclei_seg[0].cpu().numpy(), nuclei_colors_track1)
+    pred_mask = create_colored_mask(predicted_classes[0].cpu().numpy(), tissue_colors)
+    
+    logger.log_segmentations(model.mode, image, predicted_classes.cpu().numpy(), nuclei_seg.cpu().numpy())
+    
+    fig, ax = plt.subplots(1, 3, figsize=(16, 7))
+    
+    ax[0].imshow(image[0].permute(1, 2, 0).cpu().numpy())
+    ax[0].set_title("Melanoma Region of Interest")
+    ax[0].axis("off")
+    
+    ax[1].imshow(gt_mask)
+    ax[1].set_title("Ground Truth (Nuclei)")
+    ax[1].axis("off")
+    
+    ax[2].imshow(pred_mask)
+    ax[2].set_title("Predicted (Nuclei)")
+    ax[2].axis("off")
+    
+    nuclei_legend = [mpatches.Patch(color=color, label=name) for label, (name, color) in nuclei_colors_track1.items()]
+    
+    fig.legend(handles=nuclei_legend, loc="lower center", bbox_to_anchor=(0.5, 0.05), ncol=3, fontsize="small")
+    
+    plt.tight_layout()
+    plt.show()
+    
+    plt.savefig(f"{misc_save_path}/nuclei1_segmentation_{mode}_{global_step}.png")
+
+
+def visualize_nuclei2_segmentation(
+    model,
+    batch,
+    misc_save_path,
+    global_step,
+    mode
+):
+    image, tissue_seg, nuclei_seg, label = batch
+    logits, probs, predicted_classes, features = model(image) ######
+
+    gt_mask = create_colored_mask(nuclei_seg[0].cpu().numpy(), nuclei_colors_track2)
+    pred_mask = create_colored_mask(predicted_classes[0].cpu().numpy(), tissue_colors)
+    
+    fig, ax = plt.subplots(1, 3, figsize=(16, 7))
+    
+    ax[0].imshow(image[0].permute(1, 2, 0).cpu().numpy())
+    ax[0].set_title("Melanoma Region of Interest")
+    ax[0].axis("off")
+    
+    ax[1].imshow(gt_mask)
+    ax[1].set_title("Ground Truth (Tissue)")
+    ax[1].axis("off")
+    
+    ax[2].imshow(pred_mask)
+    ax[2].set_title("Predicted (Tissue)")
+    ax[2].axis("off")
+    
+    nuclei_legend = [mpatches.Patch(color=color, label=name) for label, (name, color) in nuclei_colors_track2.items()]
+    
+    fig.legend(handles=nuclei_legend, loc="lower center", bbox_to_anchor=(0.5, 0.05), ncol=3, fontsize="small")
+    
+    plt.tight_layout()
+    plt.show()
+    
+    plt.savefig(f"{misc_save_path}/nuclei2_segmentation_{mode}_{global_step}.png")
 
     
         

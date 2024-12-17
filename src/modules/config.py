@@ -15,6 +15,7 @@ class SegmentationModelConfig(SimpleNamespace):
     batch_size: int
     split: list[float]
     dataset_config: DatasetConfig
+    mode: str
     num_classes: int
     feature_extractor_path: str
     reset_encoder_parameters: bool

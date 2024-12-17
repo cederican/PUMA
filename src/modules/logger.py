@@ -71,6 +71,10 @@ class AbstractLogger(ABC):
     @abstractmethod
     def log_AUC(self, misc_save_path, value):
         raise NotImplementedError
+    
+    @abstractmethod
+    def log_segmentations(self, bg_imgs, pred_masks, true_masks):
+        raise NotImplementedError
 
     @abstractmethod
     def finish(self):
@@ -112,6 +116,43 @@ class WandbLogger(AbstractLogger):
         else:
             with open(file_path, 'a') as file:
                 file.write(f'{value}\n')
+    
+    def log_segmentations(self, mode, bg_imgs, pred_masks, true_masks):
+        """
+        Args:
+            _type_: _description_
+
+        Returns:
+            _type_: _description_
+        """
+        table = wandb.Table(columns=["ID", "Image"])
+        
+        ids = np.array(range(bg_imgs.shape[0]))
+        
+        if mode == "tissue":
+            segmentation_classes = [
+                'tissue_white_background', 'tissue_stroma', 'tissue_blood_vessel', 'tissue_tumor', 'tissue_epidermis', 'tissue_necrosis'
+            ]
+        elif mode == "nuclei1":
+            segmentation_classes = [
+                'nuclei_white_background', 'nuclei_tumor', 'nuclei_TILs', 'nuclei_other'
+            ]
+        
+        def labels():
+            l = {}
+            for i, label in enumerate(segmentation_classes):
+              l[i] = label
+            return l
+        
+        def wb_mask(bg_img, pred_mask, true_mask):
+            return wandb.Image(bg_img, masks={
+              "prediction" : {"mask_data" : pred_mask, "class_labels" : labels()},
+              "ground truth" : {"mask_data" : true_mask, "class_labels" : labels()}})
+        
+        for id, img, pred_mask, true_mask in zip(ids, bg_imgs, pred_masks, true_masks):
+            table.add_data(id, wb_mask(img, pred_mask, true_mask))
+        
+        self.wandb.log({"Table" : table})
     
     def finish(self):
         self.wandb.finish()
