@@ -161,7 +161,7 @@ class HistoDataset(Dataset):
         
             
         # visualize
-        plot_images(image.permute(1,2,0), tissue_seg, nuclei_seg, str(label)+"_"+name)
+        #plot_images(image.permute(1,2,0), tissue_seg, nuclei_seg, str(label)+"_"+name)
         
 
         # ToDo - Add data augmentation here

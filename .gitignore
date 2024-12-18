@@ -4,6 +4,9 @@ data/
 *.tar
 __pychache__/
 wandb/
-*.png
 *.pt
 *.yaml
+logs/notpretrained/
+logs/pretrained/
+logs/misc/
+logs/final/

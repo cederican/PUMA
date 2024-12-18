@@ -14,7 +14,7 @@ from src.modules.trainer import Trainer
 
 def train(config=None):
 
-    base_log_dir = '/home/cederic/dev/puma/logs'
+    base_log_dir = '/home/cederic/dev/puma/logs/final'
 
     with wandb.init(
             dir=base_log_dir,
@@ -36,7 +36,7 @@ def train(config=None):
         # Configure the model with parameters from the sweep
         train_config = SegmentationModelConfig(
             device=th.device("cuda:4" if th.cuda.is_available() else "cpu"),
-            epochs=1000,
+            epochs=10000,
             batch_size=config.batch_size,
             split = [0.8, 0.1, 0.1],
             dataset_config=DatasetConfig(
@@ -49,7 +49,7 @@ def train(config=None):
             ),
             mode=config.mode, # tissue or nuclei1 or nuclei2
             feature_extractor_path="/home/cederic/dev/puma/models/ctranspath.pth",
-            reset_encoder_parameters=True,
+            reset_encoder_parameters=False,
             ckpt_path=None,
             lr=config.lr,
             dropout=config.dropout,
@@ -62,8 +62,8 @@ def train(config=None):
             gamma=0.1,
             ckpt_save_path=ckpt_save_path,
             misc_save_path=misc_save_path,
-            val_every=100,
-            save_max=2,
+            val_every=1000,
+            save_max=5,
         )
         save_config(base_log_dir, run_name, train_config.__dict__)
         
@@ -141,7 +141,7 @@ def main_sweep():
             },
         'parameters': {
             'lr': {
-                'values': [1e-3, 1e-5]
+                'values': [1e-5]
             },
             
             'weight_decay': {
@@ -152,7 +152,7 @@ def main_sweep():
                 'values': [16]    
             },
             'dropout': {
-                'values': [0.2, 0.5]
+                'values': [0.5]
             },
             'mode': {
                 'values': ['tissue', 'nuclei1']
@@ -169,7 +169,7 @@ if __name__ == "__main__":
         # Initialize a sweep
         sweep_config = main_sweep()
         sweep_id = wandb.sweep(sweep=sweep_config, project=project_name)
-        wandb.agent(sweep_id, function=train, count=8)
+        wandb.agent(sweep_id, function=train, count=2)
         print(f"{bcolors.OKGREEN}Sweep {i} completed!{bcolors.ENDC}")
         time.sleep(4)
     print("All sweeps completed successfully!")
